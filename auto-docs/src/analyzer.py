@@ -8,6 +8,7 @@ and extract metadata about functions, classes, and modules for documentation gen
 import ast
 import os
 import sys
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass
@@ -47,7 +48,7 @@ class ClassInfo:
 
 @dataclass
 class ModuleInfo:
-    """Information about a Python module."""
+    """Information about a Python module or C# file."""
     file_path: str
     docstring: Optional[str]
     functions: List[FunctionInfo]
@@ -55,6 +56,9 @@ class ModuleInfo:
     imports: List[str]
     constants: List[str]
     last_modified: datetime
+    file_type: str = "python"  # "python" or "csharp"
+    namespace: Optional[str] = None  # For C# files
+    classification: Optional[str] = None  # File classification (controller, service, entity, etc.)
 
 
 class RepoAnalyzer:
@@ -90,13 +94,14 @@ class RepoAnalyzer:
     
     def scan_project(self) -> Dict[str, ModuleInfo]:
         """
-        Scan the entire project for Python files and analyze them.
+        Scan the entire project for Python and C# files and analyze them.
         
         Returns:
             Dictionary mapping file paths to ModuleInfo objects
         """
         modules = {}
         
+        # Scan Python files
         for py_file in self.repo_path.rglob("*.py"):
             if self.should_ignore_file(py_file):
                 continue
@@ -108,7 +113,80 @@ class RepoAnalyzer:
             except Exception as e:
                 logger.error(f"Error analyzing {py_file}: {e}")
         
+        # Scan C# files
+        for cs_file in self.repo_path.rglob("*.cs"):
+            if self.should_ignore_file(cs_file):
+                continue
+                
+            try:
+                module_info = self.analyze_csharp_file(cs_file)
+                if module_info:
+                    modules[str(cs_file)] = module_info
+            except Exception as e:
+                logger.error(f"Error analyzing {cs_file}: {e}")
+        
         return modules
+    
+    def analyze_csharp_file(self, file_path: Union[str, Path]) -> Optional[ModuleInfo]:
+        """
+        Analyze a single C# file using regex parsing.
+        
+        Args:
+            file_path: Path to the C# file to analyze
+            
+        Returns:
+            ModuleInfo object containing the file's metadata
+        """
+        file_path = Path(file_path)
+        
+        if not file_path.exists() or not file_path.suffix == '.cs':
+            return None
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            logger.warning(f"Could not decode {file_path}")
+            return None
+        
+        # Extract namespace
+        namespace_match = re.search(r'namespace\s+([^\s{]+)', content)
+        namespace = namespace_match.group(1) if namespace_match else None
+        
+        # Extract classes
+        classes = self._extract_csharp_classes(content)
+        
+        # Extract functions (methods outside classes)
+        functions = self._extract_csharp_functions(content)
+        
+        # Extract using statements
+        using_statements = re.findall(r'using\s+([^;]+);', content)
+        
+        # Extract constants
+        constants = self._extract_csharp_constants(content)
+        
+        # Extract file-level comments as docstring
+        docstring = self._extract_csharp_file_comment(content)
+        
+        # Classify file type
+        file_classification = self._classify_csharp_file(file_path, content, classes, functions)
+        
+        module_info = ModuleInfo(
+            file_path=str(file_path),
+            docstring=docstring,
+            functions=functions,
+            classes=classes,
+            imports=using_statements,
+            constants=constants,
+            last_modified=datetime.fromtimestamp(file_path.stat().st_mtime),
+            file_type="csharp",
+            namespace=namespace
+        )
+        
+        # Add classification info
+        module_info.classification = file_classification
+        
+        return module_info
     
     def analyze_python_file(self, file_path: Union[str, Path]) -> Optional[ModuleInfo]:
         """
@@ -355,3 +433,333 @@ class RepoAnalyzer:
                 complexity += 1
         
         return complexity
+    
+    def _extract_csharp_classes(self, content: str) -> List[ClassInfo]:
+        """Extract class information from C# code."""
+        classes = []
+        
+        # Pattern to match class declarations with XML docs
+        class_pattern = r'(?:///\s*<summary>\s*(.*?)\s*</summary>\s*(?:.*?\n)*?)?(?:public\s+|private\s+|internal\s+|protected\s+)*(?:abstract\s+|sealed\s+|static\s+)*class\s+(\w+)(?:\s*:\s*([^{]+))?'
+        
+        matches = re.finditer(class_pattern, content, re.MULTILINE | re.DOTALL)
+        
+        for match in matches:
+            xml_doc = match.group(1) if match.group(1) else None
+            class_name = match.group(2)
+            inheritance = match.group(3) if match.group(3) else ""
+            
+            # Extract base classes
+            bases = []
+            if inheritance:
+                bases = [base.strip() for base in inheritance.split(',')]
+            
+            # Extract methods from this class
+            methods = self._extract_csharp_methods_from_class(content, class_name)
+            
+            # Extract attributes/properties
+            attributes = self._extract_csharp_properties(content, class_name)
+            
+            class_info = ClassInfo(
+                name=class_name,
+                bases=bases,
+                docstring=xml_doc,
+                methods=methods,
+                line_number=content[:match.start()].count('\n') + 1,
+                decorators=[],  # C# uses attributes instead
+                attributes=attributes
+            )
+            
+            classes.append(class_info)
+        
+        return classes
+    
+    def _extract_csharp_functions(self, content: str) -> List[FunctionInfo]:
+        """Extract function information from C# code (methods outside classes)."""
+        functions = []
+        
+        # Pattern to match method declarations with XML docs
+        method_pattern = r'(?:///\s*<summary>\s*(.*?)\s*</summary>\s*(?:.*?\n)*?)?(?:public\s+|private\s+|internal\s+|protected\s+)*(?:static\s+|async\s+|virtual\s+|override\s+)*(\w+)\s+(\w+)\s*\(([^)]*)\)'
+        
+        matches = re.finditer(method_pattern, content, re.MULTILINE | re.DOTALL)
+        
+        for match in matches:
+            xml_doc = match.group(1) if match.group(1) else None
+            return_type = match.group(2)
+            method_name = match.group(3)
+            parameters = match.group(4)
+            
+            # Skip if this is inside a class
+            if self._is_method_inside_class(content, match.start()):
+                continue
+            
+            # Extract parameters
+            args = []
+            if parameters.strip():
+                param_list = parameters.split(',')
+                for param in param_list:
+                    param = param.strip()
+                    if param:
+                        # Extract parameter name (last word)
+                        param_parts = param.split()
+                        if len(param_parts) >= 2:
+                            args.append(param_parts[-1])
+            
+            # Check if method is async
+            is_async = 'async' in match.group(0)
+            
+            function_info = FunctionInfo(
+                name=method_name,
+                args=args,
+                defaults=[],
+                docstring=xml_doc,
+                return_annotation=return_type,
+                line_number=content[:match.start()].count('\n') + 1,
+                decorators=[],
+                is_async=is_async,
+                type_hints={}
+            )
+            
+            functions.append(function_info)
+        
+        return functions
+    
+    def _extract_csharp_methods_from_class(self, content: str, class_name: str) -> List[FunctionInfo]:
+        """Extract methods from a specific C# class."""
+        methods = []
+        
+        # Find class boundaries
+        class_start = content.find(f'class {class_name}')
+        if class_start == -1:
+            return methods
+        
+        # Find class body
+        brace_count = 0
+        class_body_start = -1
+        for i in range(class_start, len(content)):
+            if content[i] == '{':
+                if class_body_start == -1:
+                    class_body_start = i
+                brace_count += 1
+            elif content[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    class_body_end = i
+                    break
+        
+        if class_body_start == -1:
+            return methods
+        
+        class_body = content[class_body_start:class_body_end]
+        
+        # Extract methods from class body
+        method_pattern = r'(?:///\s*<summary>\s*(.*?)\s*</summary>\s*(?:.*?\n)*?)?(?:public\s+|private\s+|internal\s+|protected\s+)*(?:static\s+|async\s+|virtual\s+|override\s+)*(\w+)\s+(\w+)\s*\(([^)]*)\)'
+        
+        matches = re.finditer(method_pattern, class_body, re.MULTILINE | re.DOTALL)
+        
+        for match in matches:
+            xml_doc = match.group(1) if match.group(1) else None
+            return_type = match.group(2)
+            method_name = match.group(3)
+            parameters = match.group(4)
+            
+            # Extract parameters
+            args = []
+            if parameters.strip():
+                param_list = parameters.split(',')
+                for param in param_list:
+                    param = param.strip()
+                    if param:
+                        param_parts = param.split()
+                        if len(param_parts) >= 2:
+                            args.append(param_parts[-1])
+            
+            is_async = 'async' in match.group(0)
+            
+            function_info = FunctionInfo(
+                name=method_name,
+                args=args,
+                defaults=[],
+                docstring=xml_doc,
+                return_annotation=return_type,
+                line_number=class_body[:match.start()].count('\n') + 1,
+                decorators=[],
+                is_async=is_async,
+                type_hints={}
+            )
+            
+            methods.append(function_info)
+        
+        return methods
+    
+    def _extract_csharp_constants(self, content: str) -> List[str]:
+        """Extract constants from C# code."""
+        constants = []
+        
+        # Pattern for const declarations
+        const_pattern = r'(?:public\s+|private\s+|internal\s+|protected\s+)*const\s+\w+\s+(\w+)'
+        matches = re.finditer(const_pattern, content)
+        
+        for match in matches:
+            constants.append(match.group(1))
+        
+        # Pattern for static readonly fields (treated as constants)
+        static_readonly_pattern = r'(?:public\s+|private\s+|internal\s+|protected\s+)*static\s+readonly\s+\w+\s+(\w+)'
+        matches = re.finditer(static_readonly_pattern, content)
+        
+        for match in matches:
+            constants.append(match.group(1))
+        
+        return constants
+    
+    def _extract_csharp_properties(self, content: str, class_name: str) -> List[str]:
+        """Extract property names from a C# class."""
+        properties = []
+        
+        # Find class body (simplified)
+        class_start = content.find(f'class {class_name}')
+        if class_start == -1:
+            return properties
+        
+        # Pattern for properties
+        property_pattern = r'(?:public\s+|private\s+|internal\s+|protected\s+)*(?:static\s+)*\w+\s+(\w+)\s*\{\s*get'
+        matches = re.finditer(property_pattern, content[class_start:])
+        
+        for match in matches:
+            properties.append(match.group(1))
+        
+        return properties
+    
+    def _extract_csharp_file_comment(self, content: str) -> Optional[str]:
+        """Extract file-level XML documentation comment."""
+        # Look for file-level XML comments at the beginning
+        file_comment_pattern = r'^\s*///\s*<summary>\s*(.*?)\s*</summary>'
+        match = re.search(file_comment_pattern, content, re.MULTILINE | re.DOTALL)
+        
+        if match:
+            return match.group(1).strip()
+        
+        return None
+    
+    def _is_method_inside_class(self, content: str, method_position: int) -> bool:
+        """Check if a method is inside a class."""
+        # Count braces before the method position
+        before_method = content[:method_position]
+        
+        # Find the last class declaration before this method
+        class_matches = list(re.finditer(r'class\s+\w+', before_method))
+        if not class_matches:
+            return False
+        
+        last_class_pos = class_matches[-1].start()
+        
+        # Count braces between class and method
+        class_to_method = content[last_class_pos:method_position]
+        open_braces = class_to_method.count('{')
+        close_braces = class_to_method.count('}')
+        
+        # If more open braces than close braces, we're inside the class
+        return open_braces > close_braces
+    
+    def _classify_csharp_file(self, file_path: Path, content: str, classes: List[ClassInfo], functions: List[FunctionInfo]) -> str:
+        """Classify C# file type based on path, content, and structure."""
+        file_name = file_path.name
+        path_parts = file_path.parts
+        
+        # Classification based on file name patterns
+        if file_name.endswith('Controller.cs'):
+            return 'controller'
+        elif file_name.endswith('Service.cs'):
+            return 'service'
+        elif file_name.endswith('Repository.cs'):
+            return 'repository'
+        elif file_name.endswith('Configuration.cs'):
+            return 'configuration'
+        elif file_name.endswith('Handler.cs'):
+            return 'handler'
+        elif file_name.endswith('Middleware.cs'):
+            return 'middleware'
+        elif file_name.endswith('Extensions.cs'):
+            return 'extension'
+        elif file_name.endswith('Validator.cs'):
+            return 'validator'
+        elif file_name.endswith('Dto.cs') or file_name.endswith('Request.cs') or file_name.endswith('Response.cs'):
+            return 'dto'
+        elif file_name.endswith('Exception.cs'):
+            return 'exception'
+        
+        # Classification based on directory path
+        if 'Controllers' in path_parts:
+            return 'controller'
+        elif 'Services' in path_parts:
+            return 'service'
+        elif 'Repositories' in path_parts or 'Repository' in path_parts:
+            return 'repository'
+        elif 'Entities' in path_parts or 'Domain' in path_parts:
+            return 'entity'
+        elif 'DTOs' in path_parts or 'Models' in path_parts or 'Views' in path_parts:
+            return 'dto'
+        elif 'Configurations' in path_parts or 'Configuration' in path_parts:
+            return 'configuration'
+        elif 'Middlewares' in path_parts or 'Middleware' in path_parts:
+            return 'middleware'
+        elif 'Extensions' in path_parts:
+            return 'extension'
+        elif 'Validators' in path_parts:
+            return 'validator'
+        elif 'Exceptions' in path_parts:
+            return 'exception'
+        elif 'Migrations' in path_parts:
+            return 'migration'
+        elif 'Handlers' in path_parts:
+            return 'handler'
+        elif 'Commands' in path_parts:
+            return 'command'
+        elif 'Queries' in path_parts:
+            return 'query'
+        elif 'ValueObjects' in path_parts:
+            return 'value_object'
+        elif 'Events' in path_parts:
+            return 'event'
+        elif 'Builders' in path_parts:
+            return 'builder'
+        elif 'Helpers' in path_parts or 'Utils' in path_parts:
+            return 'utility'
+        elif 'Interfaces' in path_parts:
+            return 'interface'
+        elif 'Abstractions' in path_parts:
+            return 'abstraction'
+        
+        # Classification based on content analysis
+        if 'ControllerBase' in content or 'Controller' in content:
+            return 'controller'
+        elif 'DbContext' in content:
+            return 'db_context'
+        elif 'IRepository' in content and 'class' in content:
+            return 'repository'
+        elif 'IService' in content and 'class' in content:
+            return 'service'
+        elif 'EntityTypeConfiguration' in content:
+            return 'configuration'
+        elif 'IRequestHandler' in content or 'INotificationHandler' in content:
+            return 'handler'
+        elif 'IRequest' in content or 'INotification' in content:
+            if 'Command' in file_name:
+                return 'command'
+            elif 'Query' in file_name:
+                return 'query'
+            else:
+                return 'request'
+        elif 'Migration' in content and 'Up()' in content and 'Down()' in content:
+            return 'migration'
+        elif 'public class' in content and len(classes) > 0:
+            # Check if it's likely an entity
+            if any('public' in cls.name or 'Id' in [attr for attr in cls.attributes] for cls in classes):
+                return 'entity'
+        
+        # Default classification
+        if classes:
+            return 'class'
+        elif functions:
+            return 'utility'
+        else:
+            return 'unknown'

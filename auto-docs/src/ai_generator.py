@@ -96,10 +96,16 @@ class DocGenerator:
             
             self.rate_limiter.wait_if_needed()
             
+            # Adapt system message based on file type
+            if hasattr(module_info, 'file_type') and module_info.file_type == "csharp":
+                system_message = "Você é um especialista em documentação técnica. Gere documentação clara e abrangente para código C#/.NET em português brasileiro, usando terminologia técnica apropriada para o ecossistema .NET (Controllers, Services, DTOs, Entity Framework, etc.)."
+            else:
+                system_message = "Você é um especialista em documentação técnica. Gere documentação clara e abrangente para código Python em português brasileiro, usando terminologia técnica apropriada."
+            
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 messages=[
-                    {"role": "system", "content": "You are a technical documentation expert. Generate clear, comprehensive documentation for Python code."},
+                    {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=self.config.max_tokens,
@@ -136,7 +142,7 @@ class DocGenerator:
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 messages=[
-                    {"role": "system", "content": "You are a technical documentation expert. Generate clear, concise documentation for Python functions."},
+                    {"role": "system", "content": "Você é um especialista em documentação técnica. Gere documentação clara e concisa para funções Python em português brasileiro, usando terminologia técnica apropriada."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=min(500, self.config.max_tokens),
@@ -168,7 +174,7 @@ class DocGenerator:
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 messages=[
-                    {"role": "system", "content": "You are a technical documentation expert. Generate professional project documentation and README files."},
+                    {"role": "system", "content": "Você é um especialista em documentação técnica. Gere documentação profissional de projetos e arquivos README em português brasileiro, usando terminologia técnica apropriada."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=self.config.max_tokens * 2,  # More tokens for project overview
@@ -200,7 +206,7 @@ class DocGenerator:
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 messages=[
-                    {"role": "system", "content": "You are a technical documentation expert. Generate clear, comprehensive documentation for Python classes."},
+                    {"role": "system", "content": "Você é um especialista em documentação técnica. Gere documentação clara e abrangente para classes Python em português brasileiro, usando terminologia técnica apropriada."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=min(800, self.config.max_tokens),
@@ -230,40 +236,132 @@ class DocGenerator:
             if cls.docstring:
                 classes_summary.append(f"  - {cls.docstring.split('.')[0]}")
             if cls.methods:
-                classes_summary.append(f"  - Methods: {', '.join([m.name for m in cls.methods[:5]])}")
+                classes_summary.append(f"  - Métodos: {', '.join([m.name for m in cls.methods[:5]])}")
         
         imports_list = module_info.imports[:10]  # Limit imports to avoid token overflow
         
+        # Adapt prompt based on file type and classification
+        if module_info.file_type == "csharp":
+            language_context = "C#/.NET"
+            classification = getattr(module_info, 'classification', 'unknown')
+            
+            # Create classification-specific context
+            classification_context = self._get_classification_context(classification)
+            
+            language_specific = f"""
+**Namespace:** {module_info.namespace or "Nenhum namespace definido"}
+**Classificação:** {classification_context['name']}
+
+**Using Statements:**
+{chr(10).join(imports_list) if imports_list else "Nenhum using statement encontrado"}
+
+**Contexto Específico:**
+{classification_context['description']}
+
+**Instruções de Documentação:**
+{classification_context['instructions']}
+"""
+        else:
+            language_context = "Python"
+            language_specific = f"""
+**Imports:**
+{chr(10).join(imports_list) if imports_list else "Nenhum import encontrado"}
+"""
+        
         prompt = f"""
-Analyze this Python module and generate comprehensive documentation:
+Analise este arquivo {language_context} e gere documentação COMPLETA E DETALHADA em português brasileiro:
 
-**File:** {file_name}
-**Path:** {module_info.file_path}
+**Arquivo:** {file_name}
+**Caminho:** {module_info.file_path}
+**Tipo:** {language_context}
 
-**Module Docstring:**
-{module_info.docstring or "No docstring available"}
+**Documentação do Arquivo:**
+{module_info.docstring or "Nenhuma documentação disponível"}
 
-**Functions:**
-{chr(10).join(functions_summary) if functions_summary else "No functions found"}
+**Funções/Métodos:**
+{chr(10).join(functions_summary) if functions_summary else "Nenhuma função encontrada"}
 
 **Classes:**
-{chr(10).join(classes_summary) if classes_summary else "No classes found"}
+{chr(10).join(classes_summary) if classes_summary else "Nenhuma classe encontrada"}
 
-**Imports:**
-{chr(10).join(imports_list) if imports_list else "No imports found"}
+{language_specific}
 
-**Constants:**
-{', '.join(module_info.constants) if module_info.constants else "No constants found"}
+**Constantes:**
+{', '.join(module_info.constants) if module_info.constants else "Nenhuma constante encontrada"}
 
-Generate professional documentation including:
-1. Module overview and purpose
-2. Key functionality description
-3. Usage examples (if applicable)
-4. Function and class summaries
-5. Dependencies and requirements
-6. Notes on implementation details
+GERE DOCUMENTAÇÃO EXTREMAMENTE DETALHADA incluindo:
 
-Format: Clean markdown with appropriate headers and code blocks.
+## 1. Visão Geral Completa
+- Propósito detalhado do arquivo
+- Contexto dentro da aplicação
+- Responsabilidades principais
+- Papel na arquitetura do sistema
+
+## 2. Análise Técnica Profunda
+- Descrição detalhada de cada método/função
+- Parâmetros de entrada com tipos e exemplos
+- Valores de retorno explicados
+- Possíveis exceções e tratamento de erros
+- Complexidade computacional (quando relevante)
+
+## 3. Exemplos de Uso Práticos
+- Exemplos de código completos e funcionais
+- Casos de uso comuns
+- Cenários de integração
+- Patterns de implementação
+
+## 4. Relacionamentos e Dependências
+- Dependências externas explicadas
+- Relacionamentos com outras classes/módulos
+- Injeção de dependências (se aplicável)
+- Fluxo de dados entre componentes
+
+## 5. Padrões e Convenções
+- Padrões de design utilizados
+- Convenções de nomenclatura
+- Estrutura de código seguida
+- Boas práticas implementadas
+
+## 6. Configuração e Setup
+- Configurações necessárias
+- Variáveis de ambiente
+- Dependências de runtime
+- Instruções de inicialização
+
+## 7. Segurança e Validações
+- Validações de entrada implementadas
+- Aspectos de segurança
+- Autorização e autenticação
+- Sanitização de dados
+
+## 8. Performance e Otimizações
+- Considerações de performance
+- Otimizações implementadas
+- Possíveis gargalos
+- Métricas importantes
+
+## 9. Testes e Qualidade
+- Estratégias de teste sugeridas
+- Cobertura de testes
+- Casos de teste importantes
+- Debugging e troubleshooting
+
+## 10. Notas de Implementação
+- Decisões arquiteturais
+- Limitações conhecidas
+- TODOs e melhorias futuras
+- Observações importantes
+
+Formato: Markdown profissional com:
+- Cabeçalhos hierárquicos claros
+- Blocos de código com syntax highlighting
+- Tabelas para parâmetros e retornos
+- Listas organizadas
+- Seções bem estruturadas
+- Links internos quando apropriado
+
+Idioma: Português brasileiro com terminologia técnica precisa para {language_context}.
+Tom: Técnico, detalhado, mas acessível para desenvolvedores.
 """
         return prompt
     
@@ -274,28 +372,29 @@ Format: Clean markdown with appropriate headers and code blocks.
             type_hints_str = f"\n**Type Hints:** {json.dumps(function_info.type_hints, indent=2)}"
         
         prompt = f"""
-Generate documentation for this Python function:
+Gere documentação para esta função Python em português brasileiro:
 
-**Function:** {function_info.name}
-**Arguments:** {', '.join(function_info.args)}
-**Return Type:** {function_info.return_annotation or "Not specified"}
-**Is Async:** {function_info.is_async}
-**Decorators:** {', '.join(function_info.decorators) if function_info.decorators else "None"}
+**Função:** {function_info.name}
+**Argumentos:** {', '.join(function_info.args)}
+**Tipo de Retorno:** {function_info.return_annotation or "Não especificado"}
+**É Assíncrona:** {"Sim" if function_info.is_async else "Não"}
+**Decoradores:** {', '.join(function_info.decorators) if function_info.decorators else "Nenhum"}
 {type_hints_str}
 
-**Existing Docstring:**
-{function_info.docstring or "No docstring available"}
+**Docstring Existente:**
+{function_info.docstring or "Nenhuma docstring disponível"}
 
-**Context:** {context}
+**Contexto:** {context}
 
-Generate clear documentation including:
-1. Purpose and functionality
-2. Parameter descriptions
-3. Return value explanation
-4. Usage example
-5. Any exceptions or edge cases
+Gere documentação clara incluindo:
+1. Propósito e funcionalidade
+2. Descrição dos parâmetros
+3. Explicação do valor de retorno
+4. Exemplo de uso
+5. Exceções ou casos especiais
 
-Format: Clean markdown suitable for technical documentation.
+Formato: Markdown limpo adequado para documentação técnica.
+Idioma: Português brasileiro com terminologia técnica apropriada.
 """
         return prompt
     
@@ -307,32 +406,33 @@ Format: Clean markdown suitable for technical documentation.
             methods_summary.append(f"- {method.name}({method_args})")
         
         prompt = f"""
-Generate documentation for this Python class:
+Gere documentação para esta classe Python em português brasileiro:
 
-**Class:** {class_info.name}
-**Base Classes:** {', '.join(class_info.bases) if class_info.bases else "None"}
-**Decorators:** {', '.join(class_info.decorators) if class_info.decorators else "None"}
+**Classe:** {class_info.name}
+**Classes Base:** {', '.join(class_info.bases) if class_info.bases else "Nenhuma"}
+**Decoradores:** {', '.join(class_info.decorators) if class_info.decorators else "Nenhum"}
 
-**Existing Docstring:**
-{class_info.docstring or "No docstring available"}
+**Docstring Existente:**
+{class_info.docstring or "Nenhuma docstring disponível"}
 
-**Methods:**
-{chr(10).join(methods_summary) if methods_summary else "No methods found"}
+**Métodos:**
+{chr(10).join(methods_summary) if methods_summary else "Nenhum método encontrado"}
 
-**Attributes:**
-{', '.join(class_info.attributes) if class_info.attributes else "No attributes found"}
+**Atributos:**
+{', '.join(class_info.attributes) if class_info.attributes else "Nenhum atributo encontrado"}
 
-**Context:** {context}
+**Contexto:** {context}
 
-Generate comprehensive documentation including:
-1. Class purpose and functionality
-2. Constructor parameters
-3. Key methods overview
-4. Usage examples
-5. Inheritance relationships
-6. Important attributes
+Gere documentação abrangente incluindo:
+1. Propósito e funcionalidade da classe
+2. Parâmetros do construtor
+3. Visão geral dos métodos principais
+4. Exemplos de uso
+5. Relações de herança
+6. Atributos importantes
 
-Format: Clean markdown with appropriate structure.
+Formato: Markdown limpo com estrutura apropriada.
+Idioma: Português brasileiro com terminologia técnica adequada.
 """
         return prompt
     
@@ -343,29 +443,31 @@ Format: Clean markdown with appropriate structure.
             file_name = Path(path).name
             func_count = len(module.functions)
             class_count = len(module.classes)
-            module_summaries.append(f"- **{file_name}**: {func_count} functions, {class_count} classes")
+            module_summaries.append(f"- **{file_name}**: {func_count} funções, {class_count} classes")
         
         prompt = f"""
-Generate a comprehensive README.md for this Python project:
+Gere um README.md abrangente para este projeto Python em português brasileiro:
 
-**Project Name:** {project_name}
-**Total Modules:** {len(modules)}
+**Nome do Projeto:** {project_name}
+**Total de Módulos:** {len(modules)}
 
-**Module Structure:**
+**Estrutura dos Módulos:**
 {chr(10).join(module_summaries)}
 
-**Key Information to Include:**
-1. Project title and description
-2. Installation instructions
-3. Basic usage examples
-4. Project structure overview
-5. Key features and functionality
-6. Requirements and dependencies
-7. Contributing guidelines
-8. License information
+**Informações Principais a Incluir:**
+1. Título e descrição do projeto
+2. Instruções de instalação
+3. Exemplos de uso básico
+4. Visão geral da estrutura do projeto
+5. Funcionalidades e recursos principais
+6. Requisitos e dependências
+7. Diretrizes de contribuição
+8. Informações de licença
 
-Generate professional documentation suitable for a GitHub repository.
-Format: Clean markdown with badges, code examples, and clear structure.
+Gere documentação profissional adequada para um repositório GitHub.
+Formato: Markdown limpo com badges, exemplos de código e estrutura clara.
+Idioma: Português brasileiro com terminologia técnica adequada.
+Tom: Profissional mas acessível para desenvolvedores brasileiros.
 """
         return prompt
     
@@ -379,7 +481,7 @@ Format: Clean markdown with badges, code examples, and clear structure.
             doc += f"{module_info.docstring}\n\n"
         
         if module_info.functions:
-            doc += "## Functions\n\n"
+            doc += "## Funções\n\n"
             for func in module_info.functions:
                 args_str = ", ".join(func.args)
                 doc += f"### {func.name}({args_str})\n\n"
@@ -403,10 +505,10 @@ Format: Clean markdown with badges, code examples, and clear structure.
         if function_info.docstring:
             doc += f"{function_info.docstring}\n\n"
         else:
-            doc += f"Function {function_info.name} with {len(function_info.args)} parameters.\n\n"
+            doc += f"Função {function_info.name} com {len(function_info.args)} parâmetros.\n\n"
         
         if function_info.return_annotation:
-            doc += f"**Returns:** {function_info.return_annotation}\n\n"
+            doc += f"**Retorna:** {function_info.return_annotation}\n\n"
         
         return doc
     
@@ -417,24 +519,185 @@ Format: Clean markdown with badges, code examples, and clear structure.
         if class_info.docstring:
             doc += f"{class_info.docstring}\n\n"
         else:
-            doc += f"Class {class_info.name} with {len(class_info.methods)} methods.\n\n"
+            doc += f"Classe {class_info.name} com {len(class_info.methods)} métodos.\n\n"
         
         if class_info.bases:
-            doc += f"**Inherits from:** {', '.join(class_info.bases)}\n\n"
+            doc += f"**Herda de:** {', '.join(class_info.bases)}\n\n"
         
         return doc
     
     def _generate_fallback_project_overview(self, modules: Dict[str, ModuleInfo], project_name: str) -> str:
         """Generate fallback project overview."""
         doc = f"# {project_name}\n\n"
-        doc += "Auto-generated project documentation.\n\n"
-        doc += "## Project Structure\n\n"
+        doc += "Documentação do projeto gerada automaticamente.\n\n"
+        doc += "## Estrutura do Projeto\n\n"
         
         for path, module in modules.items():
             file_name = Path(path).name
-            doc += f"- **{file_name}**: {len(module.functions)} functions, {len(module.classes)} classes\n"
+            doc += f"- **{file_name}**: {len(module.functions)} funções, {len(module.classes)} classes\n"
         
         return doc
+    
+    def _get_classification_context(self, classification: str) -> Dict[str, str]:
+        """Get context and instructions specific to file classification."""
+        contexts = {
+            'controller': {
+                'name': 'Controller (Controlador)',
+                'description': 'Este arquivo é um Controller ASP.NET Core responsável por expor endpoints REST da API. Controllers gerenciam requisições HTTP, validam dados de entrada, orquestram operações de negócio e retornam respostas formatadas.',
+                'instructions': '''
+- Documente todos os endpoints HTTP (GET, POST, PUT, DELETE) com exemplos completos
+- Descreva parâmetros de rota, query parameters e request bodies
+- Explique códigos de status HTTP retornados
+- Documente autenticação e autorização necessárias
+- Inclua exemplos de requisições e respostas
+- Explique middleware utilizado
+- Documente validações de entrada
+- Descreva tratamento de erros e exceções
+'''
+            },
+            'service': {
+                'name': 'Service (Serviço)',
+                'description': 'Este arquivo implementa serviços de aplicação ou domínio, contendo lógica de negócio e operações específicas. Services coordenam entre diferentes componentes e implementam casos de uso complexos.',
+                'instructions': '''
+- Documente todas as operações de negócio implementadas
+- Explique regras de negócio aplicadas
+- Descreva dependências injetadas e sua finalidade
+- Documente fluxos de dados entre componentes
+- Inclua exemplos de uso dos métodos
+- Explique tratamento de transações
+- Documente validações e verificações
+- Descreva padrões de retry e circuit breaker se aplicável
+'''
+            },
+            'repository': {
+                'name': 'Repository (Repositório)',
+                'description': 'Este arquivo implementa o padrão Repository, fornecendo uma abstração para acesso a dados. Repositories encapsulam operações de persistência e consulta ao banco de dados.',
+                'instructions': '''
+- Documente todas as operações de acesso a dados
+- Explique queries complexas e otimizações
+- Descreva mapeamentos de entidades
+- Documente índices e constraints utilizados
+- Inclua exemplos de uso dos métodos
+- Explique estratégias de cache se aplicável
+- Documente performance e paginação
+- Descreva tratamento de concorrência
+'''
+            },
+            'entity': {
+                'name': 'Entity (Entidade)',
+                'description': 'Este arquivo define uma entidade do domínio, representando um objeto de negócio com identidade única. Entities encapsulam dados e comportamentos relacionados ao domínio.',
+                'instructions': '''
+- Documente todas as propriedades e sua finalidade
+- Explique relacionamentos com outras entidades
+- Descreva regras de negócio encapsuladas
+- Documente validações e invariantes
+- Inclua exemplos de criação e uso
+- Explique navegação entre entidades
+- Documente eventos de domínio se aplicável
+- Descreva lifecycle da entidade
+'''
+            },
+            'dto': {
+                'name': 'DTO (Data Transfer Object)',
+                'description': 'Este arquivo define objetos de transferência de dados, utilizados para transportar dados entre camadas da aplicação ou através de APIs. DTOs definem contratos de comunicação.',
+                'instructions': '''
+- Documente todas as propriedades e tipos
+- Explique validações de dados aplicadas
+- Descreva transformações entre DTOs e entidades
+- Documente serialização e deserialização
+- Inclua exemplos de uso em APIs
+- Explique relacionamentos com outros DTOs
+- Documente formatação e constraints
+- Descreva versionamento se aplicável
+'''
+            },
+            'configuration': {
+                'name': 'Configuration (Configuração)',
+                'description': 'Este arquivo contém configurações do Entity Framework, definindo mapeamentos entre entidades e tabelas do banco de dados. Configurations especificam schema, relacionamentos e constraints.',
+                'instructions': '''
+- Documente mapeamentos de propriedades
+- Explique relacionamentos configurados
+- Descreva índices e constraints
+- Documente conversões de tipos
+- Inclua exemplos de queries geradas
+- Explique estratégias de loading
+- Documente configurações de performance
+- Descreva seeds e dados iniciais
+'''
+            },
+            'handler': {
+                'name': 'Handler (Manipulador)',
+                'description': 'Este arquivo implementa handlers para comandos ou queries no padrão CQRS. Handlers processam requisições específicas e coordenam operações de negócio.',
+                'instructions': '''
+- Documente o comando ou query processado
+- Explique fluxo de processamento
+- Descreva validações aplicadas
+- Documente side effects e eventos
+- Inclua exemplos de uso
+- Explique tratamento de erros
+- Documente performance e otimizações
+- Descreva integração com outros handlers
+'''
+            },
+            'middleware': {
+                'name': 'Middleware',
+                'description': 'Este arquivo implementa middleware personalizado para o pipeline de requisições ASP.NET Core. Middlewares processam requisições HTTP de forma transversal.',
+                'instructions': '''
+- Documente funcionamento do middleware
+- Explique posição no pipeline
+- Descreva configuração necessária
+- Documente impacto na performance
+- Inclua exemplos de uso
+- Explique tratamento de erros
+- Documente logging e observabilidade
+- Descreva casos de uso específicos
+'''
+            },
+            'extension': {
+                'name': 'Extension (Extensão)',
+                'description': 'Este arquivo contém métodos de extensão que adicionam funcionalidades a tipos existentes. Extensions fornecem uma forma conveniente de estender comportamentos.',
+                'instructions': '''
+- Documente todos os métodos de extensão
+- Explique tipos estendidos
+- Descreva funcionalidades adicionadas
+- Documente performance e limitations
+- Inclua exemplos de uso
+- Explique convenções seguidas
+- Documente thread safety
+- Descreva casos de uso recomendados
+'''
+            },
+            'migration': {
+                'name': 'Migration (Migração)',
+                'description': 'Este arquivo contém uma migração do Entity Framework, definindo mudanças estruturais no banco de dados. Migrations permitem evolução controlada do schema.',
+                'instructions': '''
+- Documente mudanças no schema
+- Explique impacto nos dados existentes
+- Descreva estratégias de rollback
+- Documente performance da migração
+- Inclua scripts SQL gerados
+- Explique dependências entre migrations
+- Documente backup e recovery
+- Descreva validações pós-migração
+'''
+            },
+            'unknown': {
+                'name': 'Arquivo Não Classificado',
+                'description': 'Este arquivo não pôde ser classificado automaticamente. Pode conter utilitários, configurações ou funcionalidades específicas.',
+                'instructions': '''
+- Documente a finalidade do arquivo
+- Explique funcionalidades implementadas
+- Descreva como utilizar o código
+- Documente dependências
+- Inclua exemplos quando aplicável
+- Explique contexto de uso
+- Documente limitações conhecidas
+- Descreva manutenção necessária
+'''
+            }
+        }
+        
+        return contexts.get(classification, contexts['unknown'])
     
     def clear_cache(self):
         """Clear the documentation cache."""

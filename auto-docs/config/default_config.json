@@ -3,6 +3,7 @@
   "auto_update": true,
   "backup_enabled": true,
   "docs_directory": "docs",
+  "language": "pt-BR",
   "exclude_patterns": [
     "__pycache__",
     ".git",
@@ -18,13 +19,25 @@
     "build",
     "*.egg-info",
     ".tox",
-    "htmlcov"
+    "htmlcov",
+    "bin",
+    "obj",
+    "logs",
+    "TestResults"
   ],
   "include_examples": true,
   "include_type_hints": true,
   "include_complexity": false,
   "max_file_size": 1000000,
   "max_files_per_batch": 10,
+  "supported_languages": ["python", "csharp"],
+  "csharp_patterns": {
+    "controllers": ["Controller.cs", "Controllers/"],
+    "services": ["Service.cs", "Services/"],
+    "entities": ["Entity.cs", "Entities/", "Domain/"],
+    "dtos": ["Dto.cs", "DTOs/", "Models/"],
+    "repositories": ["Repository.cs", "Repositories/"]
+  },
   "rate_limit": {
     "requests_per_minute": 100,
     "burst_limit": 20

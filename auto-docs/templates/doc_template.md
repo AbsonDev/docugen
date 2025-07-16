@@ -1,15 +1,15 @@
 # {module_name}
 
-## Overview
+## Visão Geral
 {module_overview}
 
-## Installation
+## Instalação
 {installation_instructions}
 
-## Usage
+## Uso
 {usage_examples}
 
-## Functions
+## Funções
 
 {functions_section}
 
@@ -17,19 +17,19 @@
 
 {classes_section}
 
-## Constants
+## Constantes
 
 {constants_section}
 
-## Dependencies
+## Dependências
 {dependencies}
 
-## Examples
+## Exemplos
 
 {examples_section}
 
-## Notes
+## Observações
 {implementation_notes}
 
 ---
-*Generated automatically by auto-docs*
+*Gerado automaticamente pelo auto-docs*
