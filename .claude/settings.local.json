@@ -8,7 +8,8 @@
       "Bash(pip3 install:*)",
       "Bash(source:*)",
       "Bash(pip install:*)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(timeout 30 python src/main.py analyze --repo . --output test-autodocs --organized)"
     ],
     "deny": []
   }

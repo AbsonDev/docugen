@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import git
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,6 +64,18 @@ class ModuleInfo:
 
 class RepoAnalyzer:
     """Analyzes Python repositories to extract code structure and metadata."""
+    
+    # Compiled regex patterns for performance
+    COMPILED_PATTERNS = {
+        'namespace': re.compile(r'namespace\s+([^\s{]+)'),
+        'class_simple': re.compile(r'(?:public\s+|private\s+|internal\s+|protected\s+)*(?:abstract\s+|sealed\s+|static\s+)*class\s+(\w+)', re.MULTILINE),
+        'controller': re.compile(r'class\s+\w*Controller\b'),
+        'service': re.compile(r'class\s+\w*Service\b'),
+        'repository': re.compile(r'class\s+\w*Repository\b'),
+        'using_statements': re.compile(r'using\s+([^;]+);'),
+        'method_simple': re.compile(r'(?:public\s+|private\s+|protected\s+|internal\s+)[\w\s]*\s+(\w+)\s*\([^)]*\)\s*[{;]', re.MULTILINE),
+        'xml_doc': re.compile(r'///\s*<summary>\s*(.*?)\s*</summary>', re.DOTALL)
+    }
     
     def __init__(self, repo_path: str):
         """
@@ -127,12 +140,187 @@ class RepoAnalyzer:
         
         return modules
     
-    def analyze_csharp_file(self, file_path: Union[str, Path]) -> Optional[ModuleInfo]:
+    def fast_scan_project_structure(self) -> Dict[str, Any]:
+        """
+        Fast scan to get project structure without full analysis.
+        
+        Returns:
+            Dictionary with project structure info
+        """
+        structure = {
+            'python_files': [],
+            'csharp_files': [],
+            'directories': set(),
+            'file_count_by_type': {},
+            'priority_files': {
+                'high': [],    # Controllers, Main services
+                'medium': [],  # Services, Repositories
+                'low': []      # DTOs, Configurations, etc.
+            }
+        }
+        
+        logger.info("🔍 Fast scanning project structure...")
+        
+        # Fast scan for Python files
+        for py_file in self.repo_path.rglob("*.py"):
+            if self.should_ignore_file(py_file):
+                continue
+            structure['python_files'].append(str(py_file))
+            structure['directories'].add(str(py_file.parent))
+        
+        # Fast scan for C# files with priority classification
+        for cs_file in self.repo_path.rglob("*.cs"):
+            if self.should_ignore_file(cs_file):
+                continue
+            
+            file_path = str(cs_file)
+            structure['csharp_files'].append(file_path)
+            structure['directories'].add(str(cs_file.parent))
+            
+            # Quick priority classification based on file name and path
+            priority = self._classify_file_priority(cs_file)
+            structure['priority_files'][priority].append(file_path)
+        
+        # Count files by type
+        structure['file_count_by_type'] = {
+            'python': len(structure['python_files']),
+            'csharp': len(structure['csharp_files']),
+            'total': len(structure['python_files']) + len(structure['csharp_files'])
+        }
+        
+        # Convert directories set to sorted list
+        structure['directories'] = sorted(list(structure['directories']))
+        
+        logger.info(f"📊 Found {structure['file_count_by_type']['total']} files "
+                   f"({structure['file_count_by_type']['csharp']} C#, "
+                   f"{structure['file_count_by_type']['python']} Python)")
+        
+        return structure
+    
+    def scan_project_chunked(self, chunk_size: int = 15, priority_only: bool = False) -> Dict[str, ModuleInfo]:
+        """
+        Scan project in chunks for better performance and memory management.
+        
+        Args:
+            chunk_size: Number of files to process per chunk
+            priority_only: If True, only process high priority files
+            
+        Returns:
+            Dictionary mapping file paths to ModuleInfo objects
+        """
+        # First, fast scan to get structure
+        structure = self.fast_scan_project_structure()
+        
+        modules = {}
+        all_files = []
+        
+        # Determine which files to process
+        if priority_only:
+            all_files = structure['priority_files']['high']
+            logger.info(f"🎯 Processing only {len(all_files)} high priority files")
+        else:
+            # Process in priority order: high → medium → low
+            all_files = (
+                structure['priority_files']['high'] + 
+                structure['priority_files']['medium'] + 
+                structure['priority_files']['low'] +
+                structure['python_files']
+            )
+            logger.info(f"📝 Processing {len(all_files)} files in priority order")
+        
+        # Process files in chunks
+        total_chunks = (len(all_files) + chunk_size - 1) // chunk_size
+        
+        for chunk_idx in range(total_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min(start_idx + chunk_size, len(all_files))
+            chunk_files = all_files[start_idx:end_idx]
+            
+            logger.info(f"🔄 Processing chunk {chunk_idx + 1}/{total_chunks} "
+                       f"({len(chunk_files)} files)")
+            
+            # Process current chunk
+            chunk_modules = self._process_file_chunk(chunk_files)
+            modules.update(chunk_modules)
+            
+            logger.info(f"✅ Completed chunk {chunk_idx + 1}/{total_chunks} "
+                       f"({len(chunk_modules)} files analyzed)")
+        
+        logger.info(f"🎉 Analysis complete! Processed {len(modules)} files total")
+        return modules
+    
+    def _classify_file_priority(self, file_path: Path) -> str:
+        """
+        Classify file priority based on path and name patterns.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            Priority level: 'high', 'medium', or 'low'
+        """
+        file_name = file_path.name
+        path_parts = file_path.parts
+        
+        # High priority: Controllers, Main Program files, Important Services
+        if (file_name.endswith('Controller.cs') or 
+            file_name == 'Program.cs' or 
+            file_name == 'Startup.cs' or
+            'Controllers' in path_parts):
+            return 'high'
+        
+        # Medium priority: Services, Repositories, Handlers, Entities
+        if (file_name.endswith('Service.cs') or 
+            file_name.endswith('Repository.cs') or
+            file_name.endswith('Handler.cs') or
+            'Services' in path_parts or
+            'Repositories' in path_parts or
+            'Repository' in path_parts or
+            'Entities' in path_parts or
+            'Domain' in path_parts):
+            return 'medium'
+        
+        # Low priority: DTOs, Configurations, Extensions, Migrations
+        return 'low'
+    
+    def _process_file_chunk(self, file_paths: List[str]) -> Dict[str, ModuleInfo]:
+        """
+        Process a chunk of files and return their analysis.
+        
+        Args:
+            file_paths: List of file paths to process
+            
+        Returns:
+            Dictionary mapping file paths to ModuleInfo objects
+        """
+        chunk_modules = {}
+        
+        for file_path in file_paths:
+            try:
+                path_obj = Path(file_path)
+                
+                if path_obj.suffix == '.py':
+                    module_info = self.analyze_python_file(path_obj)
+                elif path_obj.suffix == '.cs':
+                    module_info = self.analyze_csharp_file(path_obj)
+                else:
+                    continue
+                
+                if module_info:
+                    chunk_modules[file_path] = module_info
+                    
+            except Exception as e:
+                logger.error(f"❌ Error analyzing {file_path}: {e}")
+        
+        return chunk_modules
+    
+    def analyze_csharp_file(self, file_path: Union[str, Path], level: str = 'auto') -> Optional[ModuleInfo]:
         """
         Analyze a single C# file using regex parsing.
         
         Args:
             file_path: Path to the C# file to analyze
+            level: Analysis level - 'basic', 'medium', 'full', or 'auto'
             
         Returns:
             ModuleInfo object containing the file's metadata
@@ -142,34 +330,90 @@ class RepoAnalyzer:
         if not file_path.exists() or not file_path.suffix == '.cs':
             return None
         
+        # Determine analysis level based on file size if auto
+        if level == 'auto':
+            file_size = file_path.stat().st_size
+            if file_size > 50000:  # 50KB - large file
+                level = 'basic'
+            elif file_size > 20000:  # 20KB - medium file
+                level = 'medium'
+            else:
+                level = 'full'
+        
         try:
+            start_time = time.time()
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+                if level == 'basic':
+                    # Read only first 200 lines for basic analysis
+                    lines = []
+                    for i, line in enumerate(f):
+                        if i >= 200:
+                            break
+                        lines.append(line)
+                    content = ''.join(lines)
+                else:
+                    content = f.read()
+            
+            # Timeout protection
+            if time.time() - start_time > 5:  # 5 second timeout for reading
+                logger.warning(f"Timeout reading {file_path}, using basic analysis")
+                level = 'basic'
+                
         except UnicodeDecodeError:
             logger.warning(f"Could not decode {file_path}")
             return None
         
-        # Extract namespace
-        namespace_match = re.search(r'namespace\s+([^\s{]+)', content)
+        # Use fast analysis methods
+        return self._analyze_csharp_content(file_path, content, level)
+    
+    def _analyze_csharp_content(self, file_path: Path, content: str, level: str) -> Optional[ModuleInfo]:
+        """
+        Analyze C# content with specified detail level.
+        
+        Args:
+            file_path: Path to the file
+            content: File content (may be partial for basic level)
+            level: Analysis level ('basic', 'medium', 'full')
+            
+        Returns:
+            ModuleInfo object
+        """
+        start_time = time.time()
+        
+        # Extract namespace (always fast)
+        namespace_match = self.COMPILED_PATTERNS['namespace'].search(content)
         namespace = namespace_match.group(1) if namespace_match else None
         
-        # Extract classes
-        classes = self._extract_csharp_classes(content)
+        # Extract using statements (always fast)
+        using_statements = [match.group(1) for match in self.COMPILED_PATTERNS['using_statements'].finditer(content)]
         
-        # Extract functions (methods outside classes)
-        functions = self._extract_csharp_functions(content)
+        # Quick classification first
+        file_classification = self._quick_classify_csharp_file(file_path, content)
         
-        # Extract using statements
-        using_statements = re.findall(r'using\s+([^;]+);', content)
+        if level == 'basic':
+            # Minimal analysis - just structure
+            classes = self._extract_csharp_classes_fast(content)
+            functions = []
+            constants = []
+            docstring = self._extract_file_comment_fast(content)
+            
+        elif level == 'medium':
+            # Medium analysis - classes and main methods
+            classes = self._extract_csharp_classes_medium(content)
+            functions = []  # Skip standalone functions for medium
+            constants = self._extract_csharp_constants_fast(content)
+            docstring = self._extract_file_comment_fast(content)
+            
+        else:  # full
+            # Full analysis (original method)
+            classes = self._extract_csharp_classes(content)
+            functions = self._extract_csharp_functions(content)
+            constants = self._extract_csharp_constants(content)
+            docstring = self._extract_csharp_file_comment(content)
         
-        # Extract constants
-        constants = self._extract_csharp_constants(content)
-        
-        # Extract file-level comments as docstring
-        docstring = self._extract_csharp_file_comment(content)
-        
-        # Classify file type
-        file_classification = self._classify_csharp_file(file_path, content, classes, functions)
+        # Timeout check
+        if time.time() - start_time > 10:  # 10 second timeout per file
+            logger.warning(f"Analysis timeout for {file_path}, returning partial results")
         
         module_info = ModuleInfo(
             file_path=str(file_path),
@@ -763,3 +1007,175 @@ class RepoAnalyzer:
             return 'utility'
         else:
             return 'unknown'
+    
+    def _quick_classify_csharp_file(self, file_path: Path, content: str) -> str:
+        """
+        Quick classification using compiled patterns and file info.
+        
+        Args:
+            file_path: Path to the file
+            content: File content (may be partial)
+            
+        Returns:
+            Classification string
+        """
+        file_name = file_path.name
+        path_parts = file_path.parts
+        
+        # Quick file name patterns
+        if file_name.endswith('Controller.cs'):
+            return 'controller'
+        elif file_name.endswith('Service.cs'):
+            return 'service'  
+        elif file_name.endswith('Repository.cs'):
+            return 'repository'
+        elif file_name.endswith('Configuration.cs'):
+            return 'configuration'
+        
+        # Quick directory patterns
+        if 'Controllers' in path_parts:
+            return 'controller'
+        elif 'Services' in path_parts:
+            return 'service'
+        elif 'Repositories' in path_parts or 'Repository' in path_parts:
+            return 'repository'
+        elif 'Entities' in path_parts or 'Domain' in path_parts:
+            return 'entity'
+        
+        # Quick content patterns using compiled regex
+        if self.COMPILED_PATTERNS['controller'].search(content):
+            return 'controller'
+        elif self.COMPILED_PATTERNS['service'].search(content):
+            return 'service'
+        elif self.COMPILED_PATTERNS['repository'].search(content):
+            return 'repository'
+        
+        return 'unknown'
+    
+    def _extract_csharp_classes_fast(self, content: str) -> List[ClassInfo]:
+        """
+        Fast extraction of class info using compiled patterns.
+        
+        Args:
+            content: File content
+            
+        Returns:
+            List of ClassInfo objects with minimal info
+        """
+        classes = []
+        
+        # Use compiled pattern for faster matching
+        for match in self.COMPILED_PATTERNS['class_simple'].finditer(content):
+            class_name = match.group(1)
+            
+            class_info = ClassInfo(
+                name=class_name,
+                bases=[],
+                docstring=None,
+                methods=[],  # Empty for fast analysis
+                line_number=content[:match.start()].count('\n') + 1,
+                decorators=[],
+                attributes=[]
+            )
+            
+            classes.append(class_info)
+        
+        return classes
+    
+    def _extract_csharp_classes_medium(self, content: str) -> List[ClassInfo]:
+        """
+        Medium-detail extraction of class info.
+        
+        Args:
+            content: File content
+            
+        Returns:
+            List of ClassInfo objects with some method info
+        """
+        classes = []
+        
+        # Use compiled pattern
+        for match in self.COMPILED_PATTERNS['class_simple'].finditer(content):
+            class_name = match.group(1)
+            
+            # Extract a few methods using simple pattern
+            methods = []
+            method_matches = list(self.COMPILED_PATTERNS['method_simple'].finditer(content))
+            
+            # Limit to first 5 methods for medium analysis
+            for method_match in method_matches[:5]:
+                method_name = method_match.group(1)
+                
+                function_info = FunctionInfo(
+                    name=method_name,
+                    args=[],
+                    defaults=[],
+                    docstring=None,
+                    return_annotation=None,
+                    line_number=content[:method_match.start()].count('\n') + 1,
+                    decorators=[],
+                    is_async=False,
+                    type_hints={}
+                )
+                methods.append(function_info)
+            
+            class_info = ClassInfo(
+                name=class_name,
+                bases=[],
+                docstring=None,
+                methods=methods,
+                line_number=content[:match.start()].count('\n') + 1,
+                decorators=[],
+                attributes=[]
+            )
+            
+            classes.append(class_info)
+        
+        return classes
+    
+    def _extract_file_comment_fast(self, content: str) -> Optional[str]:
+        """
+        Fast extraction of file-level documentation.
+        
+        Args:
+            content: File content
+            
+        Returns:
+            File comment if found
+        """
+        # Look for first XML doc comment using compiled pattern
+        match = self.COMPILED_PATTERNS['xml_doc'].search(content)
+        if match:
+            return match.group(1).strip()
+        
+        # Fallback to first few comment lines
+        lines = content.split('\n')[:10]  # Only check first 10 lines
+        comments = []
+        for line in lines:
+            line = line.strip()
+            if line.startswith('//'):
+                comments.append(line[2:].strip())
+            elif comments:  # Stop at first non-comment after finding comments
+                break
+        
+        return ' '.join(comments) if comments else None
+    
+    def _extract_csharp_constants_fast(self, content: str) -> List[str]:
+        """
+        Fast extraction of constants using simple patterns.
+        
+        Args:
+            content: File content
+            
+        Returns:
+            List of constant names
+        """
+        constants = []
+        
+        # Simple pattern for const declarations
+        const_matches = re.finditer(r'\bconst\s+\w+\s+(\w+)', content)
+        for match in const_matches:
+            constants.append(match.group(1))
+        
+        # Limit to prevent slowdown
+        return constants[:20]

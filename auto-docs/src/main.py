@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from analyzer import RepoAnalyzer
 from ai_generator import DocGenerator, DocGenerationConfig
 from git_watcher import GitWatcher
+from documentation_organizer import DocumentationOrganizer
 
 # Initialize colorama for cross-platform colored output
 colorama.init()
@@ -115,8 +116,11 @@ def cli(ctx, verbose, quiet):
 @click.option('--include-examples', is_flag=True, help='Include usage examples')
 @click.option('--include-complexity', is_flag=True, help='Include complexity metrics')
 @click.option('--max-files', default=None, type=int, help='Maximum number of files to process')
+@click.option('--organized', '-org', is_flag=True, default=True, help='Generate organized documentation structure')
+@click.option('--chunk-size', default=15, type=int, help='Number of files to process per chunk')
+@click.option('--priority-only', is_flag=True, help='Process only high priority files')
 @click.pass_context
-def analyze(ctx, repo, output, format, include_examples, include_complexity, max_files):
+def analyze(ctx, repo, output, format, include_examples, include_complexity, max_files, organized, chunk_size, priority_only):
     """Analyze repository and generate documentation."""
     repo_path = Path(repo).resolve()
     output_path = Path(output).resolve()
@@ -139,62 +143,263 @@ def analyze(ctx, repo, output, format, include_examples, include_complexity, max
         }
         doc_generator = create_doc_generator(config_overrides)
         
-        # Scan project
+        # Determine analysis method based on project size
         if not ctx.obj['quiet']:
             click.echo(f"Analyzing repository: {repo_path}")
         
-        modules = analyzer.scan_project()
+        # Fast scan first to determine approach
+        structure = analyzer.fast_scan_project_structure()
+        total_files = structure['file_count_by_type']['total']
+        
+        if total_files == 0:
+            click.echo("No Python or C# files found in repository")
+            return
+        
+        # Show structure info for large projects
+        if total_files > 50 and not ctx.obj['quiet']:
+            click.echo(f"📊 Large project detected ({total_files} files)")
+            click.echo(f"   • Python files: {structure['file_count_by_type']['python']}")
+            click.echo(f"   • C# files: {structure['file_count_by_type']['csharp']}")
+            if structure['file_count_by_type']['csharp'] > 0:
+                click.echo(f"   • High priority: {len(structure['priority_files']['high'])}")
+                click.echo(f"   • Medium priority: {len(structure['priority_files']['medium'])}")
+                click.echo(f"   • Low priority: {len(structure['priority_files']['low'])}")
+        
+        # Use appropriate scanning method
+        if total_files > 50:
+            # Use chunked processing for large projects
+            if not ctx.obj['quiet']:
+                mode = "high priority only" if priority_only else "all files"
+                click.echo(f"🚀 Using chunked processing ({mode}, {chunk_size} files per chunk)")
+            modules = analyzer.scan_project_chunked(chunk_size=chunk_size, priority_only=priority_only)
+        else:
+            # Use traditional method for small projects
+            modules = analyzer.scan_project()
         
         if not modules:
-            click.echo("No Python files found in repository")
+            click.echo("No files were successfully analyzed")
             return
         
         # Limit files if specified
         if max_files:
             modules = dict(list(modules.items())[:max_files])
         
-        # Generate documentation with progress bar
-        with tqdm(total=len(modules), desc="Generating documentation", 
-                 disable=ctx.obj['quiet']) as pbar:
-            
-            for file_path, module_info in modules.items():
-                try:
-                    # Generate documentation
-                    documentation = doc_generator.generate_file_docs(module_info)
-                    
-                    # Save documentation
-                    relative_path = Path(file_path).relative_to(repo_path)
-                    doc_filename = relative_path.with_suffix('.md').name
-                    doc_path = output_path / doc_filename
-                    
-                    with open(doc_path, 'w', encoding='utf-8') as f:
-                        f.write(documentation)
-                    
-                    if ctx.obj['verbose']:
-                        click.echo(f"Generated documentation for {file_path}")
-                    
-                except Exception as e:
-                    logger.error(f"Error processing {file_path}: {e}")
-                
-                pbar.update(1)
-        
-        # Generate project overview
-        if not ctx.obj['quiet']:
-            click.echo("Generating project overview...")
-        
         project_name = repo_path.name
-        overview = doc_generator.generate_project_overview(modules, project_name)
         
-        readme_path = output_path / "README.md"
-        with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write(overview)
+        if organized:
+            # Use DocumentationOrganizer for structured output
+            if not ctx.obj['quiet']:
+                click.echo("Generating organized documentation structure...")
+            
+            # Initialize organizer
+            organizer = DocumentationOrganizer(str(output_path), project_name)
+            
+            # Generate documentation for all modules
+            documentation = {}
+            with tqdm(total=len(modules), desc="Generating documentation", 
+                     disable=ctx.obj['quiet']) as pbar:
+                
+                for file_path, module_info in modules.items():
+                    try:
+                        # Generate documentation
+                        doc_content = doc_generator.generate_file_docs(module_info)
+                        documentation[file_path] = doc_content
+                        
+                        if ctx.obj['verbose']:
+                            click.echo(f"Generated documentation for {file_path}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing {file_path}: {e}")
+                    
+                    pbar.update(1)
+            
+            # Organize documentation into structured folders
+            if not ctx.obj['quiet']:
+                click.echo("Organizing documentation into folders...")
+            
+            structure = organizer.organize_documentation(modules, documentation)
+            
+            # Create architecture documentation
+            if not ctx.obj['quiet']:
+                click.echo("Creating architecture documentation...")
+            
+            organizer.create_architecture_docs(modules)
+            
+            if not ctx.obj['quiet']:
+                click.echo(f"Organized documentation generated successfully in {output_path}")
+                click.echo(f"Processed {len(modules)} files")
+                click.echo(f"Created {len(structure.folders)} documentation folders")
+                click.echo(f"View documentation at: {output_path / 'README.md'}")
         
-        if not ctx.obj['quiet']:
-            click.echo(f"Documentation generated successfully in {output_path}")
-            click.echo(f"Processed {len(modules)} files")
+        else:
+            # Traditional flat file structure
+            with tqdm(total=len(modules), desc="Generating documentation", 
+                     disable=ctx.obj['quiet']) as pbar:
+                
+                for file_path, module_info in modules.items():
+                    try:
+                        # Generate documentation
+                        documentation = doc_generator.generate_file_docs(module_info)
+                        
+                        # Save documentation
+                        relative_path = Path(file_path).relative_to(repo_path)
+                        doc_filename = relative_path.with_suffix('.md').name
+                        doc_path = output_path / doc_filename
+                        
+                        with open(doc_path, 'w', encoding='utf-8') as f:
+                            f.write(documentation)
+                        
+                        if ctx.obj['verbose']:
+                            click.echo(f"Generated documentation for {file_path}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing {file_path}: {e}")
+                    
+                    pbar.update(1)
+            
+            # Generate project overview
+            if not ctx.obj['quiet']:
+                click.echo("Generating project overview...")
+            
+            overview = doc_generator.generate_project_overview(modules, project_name)
+            
+            readme_path = output_path / "README.md"
+            with open(readme_path, 'w', encoding='utf-8') as f:
+                f.write(overview)
+            
+            if not ctx.obj['quiet']:
+                click.echo(f"Documentation generated successfully in {output_path}")
+                click.echo(f"Processed {len(modules)} files")
     
     except Exception as e:
         raise click.ClickException(f"Error during analysis: {e}")
+
+
+@cli.command()
+@click.option('--repo', '-r', default='/Users/absondutragalvao/Receba Projects/receba-api', help='Repository path to analyze')
+@click.option('--output', '-o', default='receba-docs', help='Output directory for documentation')
+@click.option('--max-files', default=None, type=int, help='Maximum number of files to process (for testing)')
+@click.option('--chunk-size', default=15, type=int, help='Number of files to process per chunk')
+@click.option('--priority-only', is_flag=True, help='Process only high priority files (Controllers, Program.cs, etc.)')
+@click.pass_context
+def organize(ctx, repo, output, max_files, chunk_size, priority_only):
+    """Generate comprehensive organized documentation for C#/.NET projects."""
+    repo_path = Path(repo).resolve()
+    output_path = Path(output).resolve()
+    
+    if not repo_path.exists():
+        raise click.ClickException(f"Repository path does not exist: {repo_path}")
+    
+    # Create output directory
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # Initialize analyzer
+        analyzer = RepoAnalyzer(str(repo_path))
+        
+        # Create doc generator optimized for C#
+        config_overrides = {
+            'output_format': 'markdown',
+            'include_examples': True,
+            'include_complexity': False,
+            'max_tokens': 2000,  # More tokens for detailed C# documentation
+            'temperature': 0.2   # Lower temperature for more consistent technical docs
+        }
+        doc_generator = create_doc_generator(config_overrides)
+        
+        # Fast scan first to show project structure
+        if not ctx.obj['quiet']:
+            click.echo(f"🔍 Analyzing C#/.NET repository: {repo_path}")
+        
+        structure = analyzer.fast_scan_project_structure()
+        
+        if not structure['csharp_files']:
+            click.echo("❌ No C# files found in repository")
+            return
+        
+        # Show structure info
+        if not ctx.obj['quiet']:
+            click.echo(f"📊 Project Structure:")
+            click.echo(f"   • Total files: {structure['file_count_by_type']['total']}")
+            click.echo(f"   • C# files: {structure['file_count_by_type']['csharp']}")
+            click.echo(f"   • High priority: {len(structure['priority_files']['high'])}")
+            click.echo(f"   • Medium priority: {len(structure['priority_files']['medium'])}")
+            click.echo(f"   • Low priority: {len(structure['priority_files']['low'])}")
+        
+        # Use chunked processing
+        if not ctx.obj['quiet']:
+            mode = "high priority only" if priority_only else "all files"
+            click.echo(f"🚀 Processing {mode} using chunks of {chunk_size} files...")
+        
+        modules = analyzer.scan_project_chunked(chunk_size=chunk_size, priority_only=priority_only)
+        
+        # Filter for C# files only (chunked method might return some Python files)
+        csharp_modules = {path: info for path, info in modules.items() 
+                         if getattr(info, 'file_type', 'python') == 'csharp'}
+        
+        if not csharp_modules:
+            click.echo("❌ No C# files were successfully analyzed")
+            return
+        
+        # Limit files if specified (for testing)
+        if max_files:
+            csharp_modules = dict(list(csharp_modules.items())[:max_files])
+            if not ctx.obj['quiet']:
+                click.echo(f"🔬 Limited to {max_files} files for testing")
+        
+        project_name = repo_path.name
+        
+        if not ctx.obj['quiet']:
+            click.echo(f"✅ Successfully analyzed {len(csharp_modules)} C# files")
+            click.echo("📝 Generating comprehensive documentation...")
+        
+        # Initialize organizer
+        organizer = DocumentationOrganizer(str(output_path), project_name)
+        
+        # Generate documentation for all modules
+        documentation = {}
+        with tqdm(total=len(csharp_modules), desc="📝 Generating docs", 
+                 disable=ctx.obj['quiet']) as pbar:
+            
+            for file_path, module_info in csharp_modules.items():
+                try:
+                    # Generate detailed documentation
+                    doc_content = doc_generator.generate_file_docs(module_info)
+                    documentation[file_path] = doc_content
+                    
+                    if ctx.obj['verbose']:
+                        classification = getattr(module_info, 'classification', 'unknown')
+                        click.echo(f"✅ Generated docs for {Path(file_path).name} ({classification})")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error processing {file_path}: {e}")
+                
+                pbar.update(1)
+        
+        # Organize documentation into structured folders
+        if not ctx.obj['quiet']:
+            click.echo("📂 Organizing documentation into Clean Architecture structure...")
+        
+        structure = organizer.organize_documentation(csharp_modules, documentation)
+        
+        # Create architecture documentation
+        if not ctx.obj['quiet']:
+            click.echo("🏗️ Creating architecture documentation...")
+        
+        organizer.create_architecture_docs(csharp_modules)
+        
+        # Show results
+        if not ctx.obj['quiet']:
+            click.echo("\n🎉 Documentation generation completed!")
+            click.echo(f"📊 Statistics:")
+            click.echo(f"   • Processed: {len(csharp_modules)} C# files")
+            click.echo(f"   • Created: {len(structure.folders)} documentation folders")
+            click.echo(f"   • Output: {output_path}")
+            click.echo(f"\n🔗 Start reading at: {output_path / 'README.md'}")
+            click.echo(f"🧭 Navigation guide: {output_path / 'NAVIGATION.md'}")
+    
+    except Exception as e:
+        raise click.ClickException(f"Error during organized documentation generation: {e}")
 
 
 @cli.command()
