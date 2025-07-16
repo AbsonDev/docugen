@@ -1,0 +1,58 @@
+{
+  "enabled": true,
+  "auto_update": true,
+  "backup_enabled": true,
+  "docs_directory": "docs",
+  "exclude_patterns": [
+    "__pycache__",
+    ".git",
+    ".pytest_cache",
+    "venv",
+    "env",
+    ".venv",
+    ".env",
+    "node_modules",
+    ".idea",
+    ".vscode",
+    "dist",
+    "build",
+    "*.egg-info",
+    ".tox",
+    "htmlcov"
+  ],
+  "include_examples": true,
+  "include_type_hints": true,
+  "include_complexity": false,
+  "max_file_size": 1000000,
+  "max_files_per_batch": 10,
+  "rate_limit": {
+    "requests_per_minute": 100,
+    "burst_limit": 20
+  },
+  "ai_config": {
+    "model": "llama3-8b-8192",
+    "max_tokens": 1000,
+    "temperature": 0.3,
+    "fallback_enabled": true
+  },
+  "git_hooks": {
+    "post_commit": true,
+    "pre_push": false,
+    "post_merge": false
+  },
+  "output_format": "markdown",
+  "backup_retention_days": 30,
+  "cache_enabled": true,
+  "cache_ttl_hours": 24,
+  "logging": {
+    "level": "INFO",
+    "file": "auto-docs.log",
+    "max_size_mb": 10,
+    "backup_count": 5
+  },
+  "notifications": {
+    "enabled": false,
+    "webhook_url": null,
+    "slack_token": null
+  }
+}

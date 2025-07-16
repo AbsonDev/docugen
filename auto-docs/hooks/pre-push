@@ -1,0 +1,126 @@
+#!/bin/bash
+# Auto-docs pre-push hook
+# Ensures documentation is up to date before pushing
+
+set -e
+
+# Configuration
+AUTO_DOCS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PYTHON_CMD="python3"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Logging function
+log() {
+    echo -e "${GREEN}[auto-docs]${NC} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}[auto-docs]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[auto-docs]${NC} $1"
+}
+
+# Check if we should skip documentation check
+should_skip() {
+    # Skip if NO_AUTO_DOCS environment variable is set
+    if [ "${NO_AUTO_DOCS}" = "1" ]; then
+        warn "NO_AUTO_DOCS is set, skipping documentation check"
+        return 0
+    fi
+    
+    # Skip if pushing to specific branches
+    while read local_ref local_sha remote_ref remote_sha; do
+        if [[ "$remote_ref" == *"/main" ]] || [[ "$remote_ref" == *"/master" ]]; then
+            return 1  # Don't skip for main/master branches
+        fi
+    done
+    
+    return 0
+}
+
+# Check if documentation is up to date
+check_docs_updated() {
+    local changed_files
+    changed_files=$(git diff --name-only HEAD~1 HEAD | grep '\.py$' || true)
+    
+    if [ -z "$changed_files" ]; then
+        log "No Python files changed, documentation check passed"
+        return 0
+    fi
+    
+    # Check if docs directory exists and has recent updates
+    if [ ! -d "docs" ]; then
+        warn "Documentation directory not found"
+        return 1
+    fi
+    
+    # Check if documentation files are newer than source files
+    local docs_outdated=false
+    
+    for py_file in $changed_files; do
+        if [ -f "$py_file" ]; then
+            local doc_file="docs/$(basename "$py_file" .py).md"
+            
+            if [ ! -f "$doc_file" ]; then
+                warn "Documentation missing for $py_file"
+                docs_outdated=true
+            elif [ "$py_file" -nt "$doc_file" ]; then
+                warn "Documentation outdated for $py_file"
+                docs_outdated=true
+            fi
+        fi
+    done
+    
+    if [ "$docs_outdated" = true ]; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# Main execution
+main() {
+    log "Starting pre-push documentation check..."
+    
+    # Change to repository root
+    cd "${REPO_ROOT}"
+    
+    # Read push information
+    while read local_ref local_sha remote_ref remote_sha; do
+        log "Checking push: $local_ref -> $remote_ref"
+        
+        # Check if we should skip
+        if should_skip; then
+            continue
+        fi
+        
+        # Check if auto-docs is set up
+        if [ ! -f ".auto-docs.json" ]; then
+            warn "Auto-docs not initialized in this repository"
+            continue
+        fi
+        
+        # Check if documentation is up to date
+        if ! check_docs_updated; then
+            error "Documentation appears to be outdated"
+            error "Please run 'auto-docs update' to update documentation"
+            error "Or set NO_AUTO_DOCS=1 to skip this check"
+            exit 1
+        fi
+        
+        log "Documentation check passed"
+    done
+    
+    log "Pre-push hook completed successfully"
+}
+
+# Run main function
+main "$@"

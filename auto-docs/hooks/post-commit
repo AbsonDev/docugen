@@ -1,0 +1,154 @@
+#!/bin/bash
+# Auto-docs post-commit hook
+# Automatically generates documentation after each commit
+
+set -e
+
+# Configuration
+AUTO_DOCS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PYTHON_CMD="python3"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Logging function
+log() {
+    echo -e "${GREEN}[auto-docs]${NC} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}[auto-docs]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[auto-docs]${NC} $1"
+}
+
+# Check if we should skip documentation generation
+should_skip() {
+    # Skip if in rebase or merge
+    if [ -f "${REPO_ROOT}/.git/REBASE_HEAD" ] || [ -f "${REPO_ROOT}/.git/MERGE_HEAD" ]; then
+        warn "In rebase/merge, skipping documentation update"
+        return 0
+    fi
+    
+    # Skip if NO_AUTO_DOCS environment variable is set
+    if [ "${NO_AUTO_DOCS}" = "1" ]; then
+        warn "NO_AUTO_DOCS is set, skipping documentation update"
+        return 0
+    fi
+    
+    # Skip if commit message contains [skip docs]
+    if git log -1 --pretty=%B | grep -q "\[skip docs\]"; then
+        warn "Commit message contains [skip docs], skipping documentation update"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Check if Python is available
+check_python() {
+    if ! command -v ${PYTHON_CMD} &> /dev/null; then
+        if command -v python &> /dev/null; then
+            PYTHON_CMD="python"
+        else
+            error "Python not found, skipping documentation update"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Check if auto-docs is properly installed
+check_auto_docs() {
+    if [ ! -f "${AUTO_DOCS_DIR}/src/main.py" ]; then
+        error "Auto-docs not found at ${AUTO_DOCS_DIR}, skipping documentation update"
+        return 1
+    fi
+    
+    if [ ! -f "${REPO_ROOT}/.auto-docs.json" ]; then
+        warn "Auto-docs not initialized in this repository"
+        warn "Run 'auto-docs init' to set up auto-docs"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Get changed Python files
+get_changed_files() {
+    # Get files changed in the last commit
+    git diff --name-only HEAD~1 HEAD | grep '\.py$' | head -20
+}
+
+# Main execution
+main() {
+    log "Starting post-commit documentation update..."
+    
+    # Change to repository root
+    cd "${REPO_ROOT}"
+    
+    # Check if we should skip
+    if should_skip; then
+        exit 0
+    fi
+    
+    # Check requirements
+    if ! check_python; then
+        exit 1
+    fi
+    
+    if ! check_auto_docs; then
+        exit 1
+    fi
+    
+    # Get changed files
+    changed_files=$(get_changed_files)
+    
+    if [ -z "$changed_files" ]; then
+        log "No Python files changed, skipping documentation update"
+        exit 0
+    fi
+    
+    log "Found $(echo "$changed_files" | wc -l) changed Python files"
+    
+    # Set up environment
+    export PYTHONPATH="${AUTO_DOCS_DIR}:${PYTHONPATH}"
+    
+    # Run auto-docs update
+    log "Updating documentation..."
+    
+    if ${PYTHON_CMD} -m src.main update --repo "${REPO_ROOT}" --quiet; then
+        log "Documentation updated successfully"
+        
+        # Check if documentation files were created/modified
+        if git diff --quiet HEAD -- docs/ 2>/dev/null; then
+            log "No documentation changes to commit"
+        else
+            log "Documentation files updated"
+            
+            # Optionally auto-commit documentation changes
+            if [ "${AUTO_COMMIT_DOCS}" = "1" ]; then
+                log "Auto-committing documentation changes..."
+                git add docs/
+                git commit -m "docs: update documentation [skip docs]" --no-verify
+            else
+                log "Documentation changes staged for manual commit"
+                git add docs/
+            fi
+        fi
+    else
+        error "Documentation update failed"
+        exit 1
+    fi
+    
+    log "Post-commit hook completed successfully"
+}
+
+# Run main function
+main "$@"
