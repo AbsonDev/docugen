@@ -1,107 +1,89 @@
-**Análise do Arquivo analyzer.py**
-======================================================
+**Análise do Arquivo: analyzer.py**
 
-**Visão Geral Completa**
-------------------------
+### Visão Geral Completa
 
-O arquivo `analyzer.py` é um módulo de análise de código Python que fornece funcionalidades para analisar repositórios Python utilizando parsing de árvore de sintaxe abstrata (AST) e extrair metadados sobre funções, classes e módulos para geração de documentação.
+O arquivo `analyzer.py` é um módulo de análise de código Python que fornece funcionalidades para analisar repositórios Python utilizando a análise de árvore de sintaxe (AST) e extrair metadados sobre funções, classes e módulos para geração de documentação.
 
-Este módulo é parte da aplicação `auto-docs`, que tem como objetivo gerar documentação automatizada para projetos Python. O papel do `analyzer.py` é analisar o código fonte de um projeto e extrair informações importantes para a geração de documentação.
+Dentro da aplicação, o arquivo `analyzer.py` é responsável por analisar o código Python e extrair informações importantes para a geração de documentação. Isso inclui a identificação de funções, classes e módulos, bem como a extração de metadados como nomes, descrições e parâmetros.
 
-**Análise Técnica Profunda**
----------------------------
+O papel do arquivo `analyzer.py` na arquitetura do sistema é crucial, pois fornece a base para a geração de documentação automatizada. Isso permite que os desenvolvedores concentrem-se em escrever código sem precisar se preocupar com a documentação.
 
-### Class: RepoAnalyzer
+### Análise Técnica Profunda
 
-O `RepoAnalyzer` é a classe principal do módulo, responsável por analisar repositórios Python e extrair metadados sobre o código fonte.
+#### ClassInfo
 
-**Métodos**
+A classe `ClassInfo` fornece informações sobre uma classe Python. Ela tem os seguintes métodos:
 
-* `__init__(self, project_path: str)`: Inicializa o objeto `RepoAnalyzer` com o caminho do projeto a ser analisado.
-* `should_ignore_file(self, file_path: str) -> bool`: Verifica se um arquivo deve ser ignorado durante a análise.
-* `scan_project(self) -> List[ModuleInfo]`: Analisa o projeto e retorna uma lista de informações sobre módulos.
-* `analyze_csharp_file(self, file_path: str) -> Optional[ModuleInfo]`: Analisa um arquivo C# e retorna informações sobre o módulo, se aplicável.
-* `analyze_python_file(self, file_path: str) -> Optional[ModuleInfo]`: Analisa um arquivo Python e retorna informações sobre o módulo, se aplicável.
+* `__init__(self, name, docstring, methods, attributes)`: Inicializa a classe com o nome, descrição, métodos e atributos.
+* `get_methods(self)`: Retorna uma lista de métodos da classe.
+* `get_attributes(self)`: Retorna uma lista de atributos da classe.
 
-**Parâmetros e Retornos**
+Parâmetros:
+* `name`: Nome da classe (str)
+* `docstring`: Descrição da classe (str)
+* `methods`: Métodos da classe (List[MethodInfo])
+* `attributes`: Atributos da classe (List[AttributeInfo])
 
-| Parâmetro | Tipo | Descrição |
-| --- | --- | --- |
-| project_path | str | Caminho do projeto a ser analisado |
-| file_path | str | Caminho do arquivo a ser analisado |
-| ModuleInfo | Optional | Informações sobre o módulo analisado |
+Retorno:
+* `ClassInfo`: Instância da classe `ClassInfo`
 
-**Exemplos de Uso Práticos**
----------------------------
+Possíveis exceções:
+* `ValueError`: Se o nome da classe for vazio ou nulo.
 
-### Exemplo 1: Análise de um projeto Python
+#### MethodInfo
 
+A classe `MethodInfo` fornece informações sobre uma função Python. Ela tem os seguintes métodos:
+
+* `__init__(self, name, docstring, parameters, return_type)`: Inicializa a função com o nome, descrição, parâmetros e tipo de retorno.
+* `get_parameters(self)`: Retorna uma lista de parâmetros da função.
+* `get_return_type(self)`: Retorna o tipo de retorno da função.
+
+Parâmetros:
+* `name`: Nome da função (str)
+* `docstring`: Descrição da função (str)
+* `parameters`: Parâmetros da função (List[ParameterInfo])
+* `return_type`: Tipo de retorno da função (str)
+
+Retorno:
+* `MethodInfo`: Instância da classe `MethodInfo`
+
+Possíveis exceções:
+* `ValueError`: Se o nome da função for vazio ou nulo.
+
+#### RepoAnalyzer
+
+A classe `RepoAnalyzer` é responsável por analisar um repositório Python e extrair metadados sobre funções, classes e módulos. Ela tem os seguintes métodos:
+
+* `__init__(self, repo_path)`: Inicializa a análise do repositório com o caminho do repositório.
+* `should_ignore_file(self, file_path)`: Verifica se um arquivo deve ser ignorado durante a análise.
+* `scan_project(self)`: Analisa o repositório e extrai metadados sobre funções, classes e módulos.
+* `fast_scan_project_structure(self)`: Analisa a estrutura do repositório rapidamente e extrai metadados sobre funções, classes e módulos.
+* `scan_project_chunked(self)`: Analisa o repositório em lotes e extrai metadados sobre funções, classes e módulos.
+
+Parâmetros:
+* `repo_path`: Caminho do repositório (str)
+
+Retorno:
+* `RepoAnalyzer`: Instância da classe `RepoAnalyzer`
+
+Possíveis exceções:
+* `ValueError`: Se o caminho do repositório for vazio ou nulo.
+
+### Exemplos de Uso Práticos
+
+Exemplo 1: Análise de um repositório Python
 ```python
-from analyzer import RepoAnalyzer
-
-repo_analyzer = RepoAnalyzer('/path/to/project')
-module_info_list = repo_analyzer.scan_project()
-for module_info in module_info_list:
-    print(module_info.name)
-    print(module_info.description)
-    print(module_info.functions)
+repo_analyzer = RepoAnalyzer('/path/to/repo')
+repo_analyzer.scan_project()
+print(repo_analyzer.get_classes())
 ```
-
-### Exemplo 2: Análise de um arquivo C#
-
+Exemplo 2: Extração de metadados de uma classe
 ```python
-from analyzer import RepoAnalyzer
-
-repo_analyzer = RepoAnalyzer('/path/to/project')
-module_info = repo_analyzer.analyze_csharp_file('/path/to/file.cs')
-if module_info:
-    print(module_info.name)
-    print(module_info.description)
-    print(module_info.classes)
+class_info = repo_analyzer.get_class_info('MyClass')
+print(class_info.get_methods())
 ```
+### Relacionamentos e Dependências
 
-**Relacionamentos e Dependências**
--------------------------------
+O arquivo `analyzer.py` depende das seguintes bibliotecas:
 
-O `RepoAnalyzer` depende do módulo `ast` para parsing de árvore de sintaxe abstrata e do módulo `pathlib` para manipulação de caminhos de arquivos.
-
-**Padrões e Convenções**
--------------------------
-
-O módulo `analyzer` segue os padrões de design do Python e utiliza convenções de nomenclatura padrão.
-
-**Configuração e Setup**
--------------------------
-
-Nenhum setup especial é necessário para o uso do `RepoAnalyzer`. No entanto, é necessário configurar o caminho do projeto a ser analisado.
-
-**Segurança e Validações**
--------------------------
-
-O `RepoAnalyzer` não implementa validações de entrada ou aspectos de segurança.
-
-**Performance e Otimizações**
----------------------------
-
-O `RepoAnalyzer` não implementa otimizações específicas, mas é projetado para ser eficiente em termos de performance.
-
-**Testes e Qualidade**
----------------------
-
-O módulo `analyzer` não inclui testes unitários ou de integração. No entanto, é recomendável implementar testes para garantir a qualidade do código.
-
-**Notas de Implementação**
--------------------------
-
-O `RepoAnalyzer` foi projetado para ser escalável e flexível, permitindo a análise de projetos de qualquer tamanho. No entanto, é importante notar que a análise de projetos grandes pode ser demorada.
-
-**Limitações**
---------------
-
-O `RepoAnalyzer` não é capaz de analisar arquivos C# que contenham código Python embutido.
-
-**TODOs e Melhorias Futuras**
----------------------------
-
-* Implementar suporte a análise de arquivos C# que contenham código Python embutido.
-* Implement
+* `ast`: Biblioteca para análise
